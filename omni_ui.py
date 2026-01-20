@@ -67,10 +67,8 @@ class AegisWindow(tk.Tk):
         self.width = 1200; self.height = 950
         self.center_window(self.width, self.height)
         self.configure(bg="#050505")
-        
         self.c_bg = "#050505"; self.c_panel = "#111111"; self.c_accent = "#00FFC8" 
         self.c_text = "#CCCCCC"; self.c_warn = "#FF3333"; self.c_success = "#00FF41"; self.c_select = "#004444"
-        
         self.setup_styles(); self.setup_title_bar(); self.setup_status_bar(); self.setup_activity_monitor()
 
     def center_window(self, width, height):
@@ -92,7 +90,7 @@ class AegisWindow(tk.Tk):
         self.title_bar.pack(fill="x")
         self.title_bar.bind("<ButtonPress-1>", self.start_move)
         self.title_bar.bind("<B1-Motion>", self.do_move)
-        tk.Label(self.title_bar, text=" OMNI-GEN: ZENITH (v24.1)", bg="#151515", fg=self.c_accent, font=("Impact", 12)).pack(side="left", padx=10)
+        tk.Label(self.title_bar, text=" OMNI-GEN: ZENITH (v24.2)", bg="#151515", fg=self.c_accent, font=("Impact", 12)).pack(side="left", padx=10)
         self.btn_lock = tk.Button(self.title_bar, text="LOCK SYSTEM", command=self.manual_lock, bg="#330000", fg="red", bd=0, font=("Bold", 9))
         self.btn_lock.pack(side="right", padx=5)
         tk.Button(self.title_bar, text=" X ", command=self.destroy, bg="#151515", fg="white", bd=0, activebackground="red").pack(side="right")
@@ -138,7 +136,6 @@ class OmniGenApp(AegisWindow):
         self.p_emo = tk.BooleanVar(value=False); self.p_cust = tk.StringVar()
         self.excluded = set(); self.cur_pre = tk.StringVar()
         
-        # Load timeout
         self.time_val = tk.StringVar(value=str(self.config.get("timeout_val")))
         self.time_unit = tk.StringVar(value=self.config.get("timeout_unit"))
         self.apply_timeout_settings() 
@@ -175,7 +172,7 @@ class OmniGenApp(AegisWindow):
         self.set_status("COPIED TO CLIPBOARD (SECURE ERASE IN 30s)")
         self.after(30000, lambda: [self.clipboard_clear(), self.set_status("CLIPBOARD CLEARED")])
 
-    # --- VAULT INTEROPERABILITY ---
+    # --- POPUPS ---
     def popup_io_menu(self):
         top = tk.Toplevel(self); top.geometry("300x250"); top.configure(bg="#222"); top.title("INTEROPERABILITY")
         tk.Label(top, text="DATA TRANSFER", bg="#222", fg=self.c_accent, font=("Impact", 12)).pack(pady=10)
@@ -221,10 +218,8 @@ class OmniGenApp(AegisWindow):
         self.tree.heading("ID", text="ID"); self.tree.column("ID", width=30)
         self.tree.heading("Label", text="Label"); self.tree.heading("User", text="User"); self.tree.heading("Pass", text="Password")
         self.tree.pack(fill="both", expand=True)
-        
         self.tree.bind("<Button-1>", self.on_drag_start); self.tree.bind("<B1-Motion>", self.on_drag_motion); self.tree.bind("<ButtonRelease-1>", self.on_drag_release)
         self.tree.bind("<Button-3>", self.show_context_menu)
-
         bot = tk.Frame(self.content, bg=self.c_bg); bot.pack(fill="x", pady=5)
         tk.Button(bot, text="DETAILS", command=self.vault_detail, bg=self.c_accent, fg="black").pack(side="left", fill="x", expand=True)
         self.refresh_vault()
@@ -367,10 +362,19 @@ class OmniGenApp(AegisWindow):
             tk.Label(top, text="NOTES:", bg="#222", fg="#00FFC8").pack(anchor="w", padx=20, pady=(10,0))
             tk.Label(top, text=r[6], bg="#222", fg="white", wraplength=350).pack(anchor="w", padx=20)
 
+    # --- DECODER TAB (MODIFIED) ---
     def show_dec(self):
-        self.clr(); f = self.mk_frame(" DECODER ")
+        self.clr()
+        # Ensure the decoder UI fills the entire available area
+        f = tk.LabelFrame(self.content, text=" DECODER ", bg=self.c_bg, fg=self.c_accent, font=("Consolas", 11))
+        # Use expand=True so it claims vertical space
+        f.pack(fill="both", expand=True, pady=10)
+        
         tk.Button(f, text="OPEN FILE", command=self.run_decode, bg=self.c_accent, fg="black").pack(pady=10)
-        self.txt_dec = tk.Text(f, height=15, bg="black", fg=self.c_success); self.txt_dec.pack(fill="both", expand=True)
+        
+        # Remove fixed height to let text box expand to bottom
+        self.txt_dec = tk.Text(f, bg="black", fg=self.c_success, bd=0)
+        self.txt_dec.pack(fill="both", expand=True, padx=10, pady=10)
 
     def run_decode(self):
         p = filedialog.askopenfilename(filetypes=[("Omni", "*.omni")])
@@ -383,8 +387,6 @@ class OmniGenApp(AegisWindow):
 
     def show_settings(self):
         self.clr(); f = self.mk_frame(" CONFIG ")
-        
-        # --- TIMER ---
         tk.Label(f, text="AUTO-LOGOUT:", bg=self.c_bg, fg="white").pack(anchor="w", padx=10)
         r = tk.Frame(f, bg=self.c_bg); r.pack(fill="x", padx=10)
         tk.Entry(r, textvariable=self.time_val, width=10).pack(side="left")
@@ -397,15 +399,13 @@ class OmniGenApp(AegisWindow):
                      "Months":2592000, "Years":31536000, "Decades":315360000, 
                      "Centuries":3153600000, "Millennia":31536000000}
                 self.timeout_seconds = v * m.get(u, 60)
-                self.config.set("timeout_val", v); self.config.set("timeout_unit", u) # Fixed config key update
+                self.config.set("timeout_val", v); self.config.set("timeout_unit", u)
                 messagebox.showinfo("Applied", f"Timeout set to {v} {u}")
             except: pass
         tk.Button(r, text="APPLY", command=apply, bg=self.c_accent, fg="black").pack(side="left")
         
-        # --- CREDENTIAL ROTATION ---
         f2 = self.mk_frame(" SECURITY ROTATION ")
         tk.Label(f2, text="CHANGE MASTER CREDENTIALS", bg=self.c_bg, fg="#FF9900").pack(anchor="w", padx=10, pady=5)
-        
         def do_rotate():
             if not self.is_unlocked: messagebox.showerror("Locked", "Must be logged in."); return
             top = tk.Toplevel(self); top.geometry("400x400"); top.configure(bg="#222"); top.title("ROTATE KEYS")
@@ -424,7 +424,6 @@ class OmniGenApp(AegisWindow):
             tk.Button(top, text="RE-ENCRYPT VAULT", command=commit_rot, bg="red", fg="white").pack(pady=20)
         tk.Button(f2, text="CHANGE PIN & 2FA", command=do_rotate, bg="#333", fg="white").pack(fill="x", padx=20, pady=5)
         
-        # --- SYSTEM PREFS ---
         c = self.mk_frame(" SYSTEM PREFERENCES ")
         tk.Label(c, text="DEFAULT FORMAT:", bg=self.c_bg, fg="white").pack(anchor="w", padx=10, pady=(10,0))
         def set_fmt(v): self.config.set("default_ext", v); self.fext.set(v)
@@ -432,7 +431,6 @@ class OmniGenApp(AegisWindow):
         tk.Button(fr, text=".omni", command=lambda: set_fmt(".omni"), bg="#333", fg="white").pack(side="left")
         tk.Button(fr, text=".txt", command=lambda: set_fmt(".txt"), bg="#333", fg="white").pack(side="left", padx=5)
 
-        # Data
         d = self.mk_frame(" DATA MANAGEMENT ")
         tk.Button(d, text="CLEAR CLIPBOARD NOW", command=self.clipboard_clear, bg="#444", fg="white").pack(fill="x", padx=20, pady=5)
 
