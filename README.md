@@ -21,11 +21,22 @@
     * `.txt`: Standard plain text.
     * `.omni`: A compressed, binary-obfuscated proprietary format.
 
-### 🔐 Secure Vault
+### 🔐 Secure Vault & Decoder
 * **Encrypted Storage:** All data (Usernames, Passwords, Notes, URLs) is encrypted at rest using the Ironclad engine.
 * **Quantum Editor:** A paginated, lightweight text editor capable of handling massive text data without memory crashes.
 * **Drag-and-Drop Organization:** Visually reorganize your vault entries.
 * **Interoperability:** Full Import/Export support for CSV standards (Bitwarden/Excel compatible).
+* **Sovereign Ownership:** Files generated while logged in are cryptographically locked to your account.
+
+## 📸 Interface Gallery
+
+### Main Generator Interface
+*The Aegis UI featuring the Entropy Matrix and Infinite-Scale controls.*
+![Main Generator](screenshots/Screenshot%202026-01-20%20133348.png)
+
+### Quantum Decoder
+*The secure decoding environment for inspecting proprietary `.omni` files.*
+![Decoder Interface](screenshots/Screenshot%202026-01-20%20134249.png)
 
 ## 🛠️ Installation
 
@@ -48,6 +59,7 @@ python OmniGen.py
 * `omni_core.py` - Backend logic (Crypto Engine, SQLite Manager, File Streaming).
 * `aegis_vault_v3.db` - Encrypted database (Auto-generated).
 * `omni_config.json` - User preferences (Auto-generated).
+* `screenshots/` - Interface preview images.
 
 ## ⚠️ Security Notice
 
