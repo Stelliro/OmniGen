@@ -19,7 +19,7 @@ class IroncladCrypto:
         return hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
 
     @staticmethod
-    def encrypt(data: str, key: bytes) -> bytes:
+    def encrypt(data: bytes, key: bytes) -> bytes:
         if isinstance(data, str): data = data.encode()
         nonce = secrets.token_bytes(16)
         keystream = bytearray()
@@ -33,11 +33,11 @@ class IroncladCrypto:
         return nonce + tag + ciphertext
 
     @staticmethod
-    def decrypt(payload: bytes, key: bytes) -> str:
+    def decrypt(payload: bytes, key: bytes) -> bytes:
         try:
             nonce = payload[:16]; tag = payload[16:48]; ciphertext = payload[48:]
             calc_tag = hmac.new(key, nonce + ciphertext, hashlib.sha256).digest()
-            if not hmac.compare_digest(tag, calc_tag): return "[INTEGRITY COMPROMISED]"
+            if not hmac.compare_digest(tag, calc_tag): return None
             keystream = bytearray()
             num_blocks = (len(ciphertext) // 64) + 1
             for i in range(num_blocks):
@@ -45,8 +45,8 @@ class IroncladCrypto:
                 block = hmac.new(key, nonce + counter, hashlib.sha512).digest()
                 keystream.extend(block)
             plaintext = bytes(a ^ b for a, b in zip(ciphertext, keystream))
-            return plaintext.decode('utf-8')
-        except: return "[DECRYPTION FAILED]"
+            return plaintext
+        except: return None
 
     @staticmethod
     def get_totp_token(secret, interval=30):
@@ -100,10 +100,12 @@ class VaultManager:
         rows = c.fetchall()
         decrypted_cache = []
         for r in rows:
-            u = IroncladCrypto.decrypt(r[2], self.master_key)
-            p = IroncladCrypto.decrypt(r[4], self.master_key)
-            n = IroncladCrypto.decrypt(r[6], self.master_key)
-            decrypted_cache.append({'id': r[0], 'lbl': r[1], 'usr': u, 'eml': r[3], 'pass': p, 'url': r[5], 'note': n, 'date': r[7]})
+            try:
+                u = IroncladCrypto.decrypt(r[2], self.master_key).decode('utf-8')
+                p = IroncladCrypto.decrypt(r[4], self.master_key).decode('utf-8')
+                n = IroncladCrypto.decrypt(r[6], self.master_key).decode('utf-8')
+                decrypted_cache.append({'id': r[0], 'lbl': r[1], 'usr': u, 'eml': r[3], 'pass': p, 'url': r[5], 'note': n, 'date': r[7]})
+            except: pass
         new_salt = secrets.token_bytes(32)
         new_key = IroncladCrypto.derive_key(new_pin, new_salt)
         new_hash = hashlib.sha256(new_key).hexdigest()
@@ -181,7 +183,7 @@ class VaultManager:
         clean = []
         for r in raw:
             try:
-                dec_user = IroncladCrypto.decrypt(r[2], self.master_key)
+                dec_user = IroncladCrypto.decrypt(r[2], self.master_key).decode('utf-8')
                 clean.append((r[0], r[1], dec_user, r[3], r[4], r[5]))
             except: pass
         return clean
@@ -191,9 +193,9 @@ class VaultManager:
         conn = sqlite3.connect(self.db_name); c = conn.cursor()
         c.execute("SELECT * FROM vault WHERE id=?", (eid,)); row = c.fetchone(); conn.close()
         if not row: return None
-        return (row[0], row[1], IroncladCrypto.decrypt(row[2], self.master_key), row[3], 
-                IroncladCrypto.decrypt(row[4], self.master_key), row[5], 
-                IroncladCrypto.decrypt(row[6], self.master_key), row[7])
+        return (row[0], row[1], IroncladCrypto.decrypt(row[2], self.master_key).decode('utf-8'), row[3], 
+                IroncladCrypto.decrypt(row[4], self.master_key).decode('utf-8'), row[5], 
+                IroncladCrypto.decrypt(row[6], self.master_key).decode('utf-8'), row[7])
 
     def delete_entry(self, eid):
         conn = sqlite3.connect(self.db_name); c = conn.cursor()
@@ -206,8 +208,9 @@ class VaultManager:
         rows = c.fetchall(); conn.close()
         clean_rows = []
         for r in rows:
-            clean_rows.append([r[0], IroncladCrypto.decrypt(r[1], self.master_key), r[2], 
-                               IroncladCrypto.decrypt(r[3], self.master_key), r[4], IroncladCrypto.decrypt(r[5], self.master_key)])
+            clean_rows.append([r[0], IroncladCrypto.decrypt(r[1], self.master_key).decode('utf-8'), r[2], 
+                               IroncladCrypto.decrypt(r[3], self.master_key).decode('utf-8'), r[4], 
+                               IroncladCrypto.decrypt(r[5], self.master_key).decode('utf-8')])
         with open(filepath, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(["Label", "Username", "Email", "Password", "URL", "Notes"])
@@ -233,39 +236,77 @@ class VaultManager:
 
 # --- FILE STREAMER ---
 class OmniFileHandler:
-    MAGIC = b'OMNI_V15'
+    MAGIC_PUB = b'OMNI_V15'
+    MAGIC_SEC = b'OMNI_SEC'
+
     @staticmethod
-    def write_stream(filepath, size, pool, progress_cb, stop_event, is_char_mode=False):
+    def write_stream(filepath, size, pool, progress_cb, stop_event, is_char_mode=False, owner_key=None):
         rng = secrets.SystemRandom(); chunk = 1024 * 1024; written = 0; is_omni = filepath.endswith(".omni")
         mode = "wb" if is_omni else "w"; encoding = None if is_omni else "utf-8"
-        target = size 
+        header = OmniFileHandler.MAGIC_SEC if owner_key else OmniFileHandler.MAGIC_PUB
+        
         with open(filepath, mode, encoding=encoding) as f:
-            if is_omni: f.write(OmniFileHandler.MAGIC)
-            while written < target:
+            if is_omni: f.write(header)
+            while written < size:
                 if stop_event.is_set(): break
-                remaining = target - written
-                curr_batch = min(remaining, chunk)
-                raw = "".join([rng.choice(pool) for _ in range(curr_batch)])
+                curr = min(size - written, chunk)
+                raw = "".join([rng.choice(pool) for _ in range(curr)])
                 if is_omni:
                     data = zlib.compress(raw.encode())
+                    if owner_key: data = IroncladCrypto.encrypt(data, owner_key)
                     f.write(len(data).to_bytes(4, 'big')); f.write(data)
-                    written += curr_batch 
+                    written += curr 
                 else:
                     f.write(raw)
-                    if is_char_mode: written += len(raw)
-                    else: written += len(raw.encode('utf-8'))
+                    written += len(raw) if is_char_mode else len(raw.encode('utf-8'))
                 progress_cb(written)
 
     @staticmethod
-    def read_omni(filepath):
+    def read_omni(filepath, owner_key=None):
         with open(filepath, "rb") as f:
-            if f.read(len(OmniFileHandler.MAGIC)) != OmniFileHandler.MAGIC: yield "ERROR: Invalid File Format"; return
+            magic = f.read(8)
+            if magic == OmniFileHandler.MAGIC_SEC:
+                if not owner_key:
+                    yield "ERROR: FILE IS ENCRYPTED. LOGIN TO VIEW."; return
+            elif magic == OmniFileHandler.MAGIC_PUB: pass
+            else: yield "ERROR: INVALID FILE FORMAT"; return
+
             while True:
                 sb = f.read(4)
                 if not sb: break
                 size = int.from_bytes(sb, 'big'); data = f.read(size)
                 if len(data) != size: break
-                yield zlib.decompress(data).decode('utf-8')
+                
+                if magic == OmniFileHandler.MAGIC_SEC:
+                    data = IroncladCrypto.decrypt(data, owner_key)
+                    if data is None: yield "ACCESS DENIED: NOT FILE OWNER"; return
+                
+                try: yield zlib.decompress(data).decode('utf-8')
+                except: yield "[DATA CORRUPTION]"
+
+    @staticmethod
+    def claim_file(filepath, new_owner_key):
+        temp_path = filepath + ".tmp"
+        try:
+            with open(filepath, "rb") as f_in:
+                with open(temp_path, "wb") as f_out:
+                    magic = f_in.read(8)
+                    if magic != OmniFileHandler.MAGIC_PUB: return False
+                    f_out.write(OmniFileHandler.MAGIC_SEC)
+                    while True:
+                        sb = f_in.read(4)
+                        if not sb: break
+                        size = int.from_bytes(sb, 'big')
+                        data = f_in.read(size)
+                        # data is compressed bytes. Encrypt it.
+                        enc_data = IroncladCrypto.encrypt(data, new_owner_key)
+                        f_out.write(len(enc_data).to_bytes(4, 'big'))
+                        f_out.write(enc_data)
+            os.replace(temp_path, filepath)
+            return True
+        except:
+            if os.path.exists(temp_path): os.remove(temp_path)
+            return False
 
 # --- CONFIG MANAGER ---
 class ConfigManager:
@@ -296,10 +337,10 @@ class PresetManager:
         self.load()
 
     def load(self):
-        try: 
-            with open(self.fn, 'r') as f: 
+        try:
+            with open(self.fn, 'r') as f:
                 self.data = json.load(f)
-        except: 
+        except:
             self.data = {}
 
     def save(self, name, val):
@@ -307,10 +348,10 @@ class PresetManager:
         self._w()
 
     def delete(self, name):
-        if name in self.data: 
+        if name in self.data:
             del self.data[name]
             self._w()
 
     def _w(self):
-        with open(self.fn, 'w') as f: 
+        with open(self.fn, 'w') as f:
             json.dump(self.data, f, indent=4)

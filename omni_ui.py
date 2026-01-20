@@ -67,8 +67,10 @@ class AegisWindow(tk.Tk):
         self.width = 1200; self.height = 950
         self.center_window(self.width, self.height)
         self.configure(bg="#050505")
+        
         self.c_bg = "#050505"; self.c_panel = "#111111"; self.c_accent = "#00FFC8" 
         self.c_text = "#CCCCCC"; self.c_warn = "#FF3333"; self.c_success = "#00FF41"; self.c_select = "#004444"
+        
         self.setup_styles(); self.setup_title_bar(); self.setup_status_bar(); self.setup_activity_monitor()
 
     def center_window(self, width, height):
@@ -90,7 +92,7 @@ class AegisWindow(tk.Tk):
         self.title_bar.pack(fill="x")
         self.title_bar.bind("<ButtonPress-1>", self.start_move)
         self.title_bar.bind("<B1-Motion>", self.do_move)
-        tk.Label(self.title_bar, text=" OMNI-GEN: ZENITH (v24.2)", bg="#151515", fg=self.c_accent, font=("Impact", 12)).pack(side="left", padx=10)
+        tk.Label(self.title_bar, text=" OMNI-GEN: SOVEREIGN (v25.1)", bg="#151515", fg=self.c_accent, font=("Impact", 12)).pack(side="left", padx=10)
         self.btn_lock = tk.Button(self.title_bar, text="LOCK SYSTEM", command=self.manual_lock, bg="#330000", fg="red", bd=0, font=("Bold", 9))
         self.btn_lock.pack(side="right", padx=5)
         tk.Button(self.title_bar, text=" X ", command=self.destroy, bg="#151515", fg="white", bd=0, activebackground="red").pack(side="right")
@@ -141,6 +143,8 @@ class OmniGenApp(AegisWindow):
         self.apply_timeout_settings() 
         
         self.v_search = tk.StringVar(); self.var_keep_open = tk.BooleanVar(value=False)
+        
+        self.current_decoder_file = None
         self.setup_ui()
 
     def apply_timeout_settings(self):
@@ -362,28 +366,60 @@ class OmniGenApp(AegisWindow):
             tk.Label(top, text="NOTES:", bg="#222", fg="#00FFC8").pack(anchor="w", padx=20, pady=(10,0))
             tk.Label(top, text=r[6], bg="#222", fg="white", wraplength=350).pack(anchor="w", padx=20)
 
-    # --- DECODER TAB (MODIFIED) ---
+    # --- DECODER TAB (MODIFIED WITH CLAIM) ---
     def show_dec(self):
         self.clr()
-        # Ensure the decoder UI fills the entire available area
         f = tk.LabelFrame(self.content, text=" DECODER ", bg=self.c_bg, fg=self.c_accent, font=("Consolas", 11))
-        # Use expand=True so it claims vertical space
         f.pack(fill="both", expand=True, pady=10)
         
-        tk.Button(f, text="OPEN FILE", command=self.run_decode, bg=self.c_accent, fg="black").pack(pady=10)
+        btn_fr = tk.Frame(f, bg=self.c_bg)
+        btn_fr.pack(pady=10)
+        tk.Button(btn_fr, text="OPEN FILE", command=self.run_decode, bg=self.c_accent, fg="black").pack(side="left", padx=5)
         
-        # Remove fixed height to let text box expand to bottom
+        self.btn_claim = tk.Button(btn_fr, text="CLAIM OWNERSHIP", command=self.do_claim, bg="#333", fg="#555", state="disabled")
+        self.btn_claim.pack(side="left", padx=5)
+        
         self.txt_dec = tk.Text(f, bg="black", fg=self.c_success, bd=0)
         self.txt_dec.pack(fill="both", expand=True, padx=10, pady=10)
 
     def run_decode(self):
         p = filedialog.askopenfilename(filetypes=[("Omni", "*.omni")])
         if not p: return
+        self.current_decoder_file = p
         self.txt_dec.delete("1.0", tk.END)
         try:
-            for chunk in omni_core.OmniFileHandler.read_omni(p): self.txt_dec.insert(tk.END, chunk)
+            is_unclaimed = False
+            for chunk in omni_core.OmniFileHandler.read_omni(p, self.core.master_key):
+                if chunk == "ERROR: FILE IS ENCRYPTED. LOGIN TO VIEW.":
+                    messagebox.showerror("Error", chunk); return
+                if chunk == "ACCESS DENIED: NOT FILE OWNER":
+                    messagebox.showerror("Security", chunk); return
+                
+                self.txt_dec.insert(tk.END, chunk)
+            
+            with open(p, "rb") as f:
+                magic = f.read(8)
+                if magic == omni_core.OmniFileHandler.MAGIC_PUB:
+                    if self.core.master_key:
+                        self.btn_claim.config(state="normal", bg=self.c_warn, fg="black")
+                    else:
+                        self.set_status("LOGIN TO CLAIM THIS FILE")
+                else:
+                    self.btn_claim.config(state="disabled", bg="#333", fg="#555")
+
             self.set_status("DECODING COMPLETE")
-        except: self.set_status("DECODE ERROR")
+        except Exception as e: self.set_status("DECODE ERROR: " + str(e))
+
+    def do_claim(self):
+        if not self.current_decoder_file or not self.core.master_key: return
+        if messagebox.askyesno("CLAIM FILE", "This will ENCRYPT the file with your key.\nNo one else will be able to read it.\nProceed?"):
+            success = omni_core.OmniFileHandler.claim_file(self.current_decoder_file, self.core.master_key)
+            if success:
+                messagebox.showinfo("Success", "File Claimed & Encrypted.")
+                self.btn_claim.config(state="disabled")
+                self.set_status("FILE SECURED")
+            else:
+                messagebox.showerror("Error", "Failed to claim file.")
 
     def show_settings(self):
         self.clr(); f = self.mk_frame(" CONFIG ")
@@ -509,13 +545,15 @@ class OmniGenApp(AegisWindow):
             if not path: return
 
         self.btn_go.config(state="disabled"); self.stop_event.clear(); self.set_status("GENERATING...")
-        threading.Thread(target=self.worker, args=(path, target, final_pool, is_char)).start()
+        # PASS MASTER KEY TO WORKER (for potential encryption)
+        threading.Thread(target=self.worker, args=(path, target, final_pool, is_char, self.core.master_key)).start()
 
-    def worker(self, path, size, pool, is_char):
+    def worker(self, path, size, pool, is_char, key):
         def cb(w): self.prog['value'] = (w/size)*100
         try:
             if path:
-                omni_core.OmniFileHandler.write_stream(path, size, pool, cb, self.stop_event, is_char)
+                # Pass Key to write_stream
+                omni_core.OmniFileHandler.write_stream(path, size, pool, cb, self.stop_event, is_char, owner_key=key)
                 self.generated_result = "FILE_ON_DISK"
                 if size < 50000 and not path.endswith(".omni"):
                     try: 
